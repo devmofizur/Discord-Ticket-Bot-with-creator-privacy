@@ -1,0 +1,94 @@
+
+@bot.event
+async def on_interaction(interaction: Interaction):
+    if interaction.type == discord.InteractionType.component and interaction.data[
+            "custom_id"] == "create_ticket":
+        # Check if interaction is in a guild
+        if not interaction.guild:
+            await interaction.response.send_message(
+                "❌ This command can only be used in a server.", ephemeral=True)
+            return
+
+        config = load_config()
+        support_role_id = config["support_role_id"]
+        if support_role_id is None:
+            await interaction.response.send_message(
+                "❌ Setup not complete. Ask admin to run `/setup`.",
+                ephemeral=True)
+            return
+
+        guild = interaction.guild
+        support_role = guild.get_role(support_role_id)
+        if not support_role:
+            await interaction.response.send_message(
+                "❌ Support role not found. Please run `/setup` again.",
+                ephemeral=True)
+            return
+
+        count = get_ticket_count()
+        ticket_name = f"ticket-{count:03}"
+
+        overwrites = {
+            guild.default_role:
+            discord.PermissionOverwrite(read_messages=False),
+            interaction.user:
+            discord.PermissionOverwrite(read_messages=True,
+                                        send_messages=True),
+            support_role:
+            discord.PermissionOverwrite(read_messages=True,
+                                        send_messages=True),
+        }
+
+        try:
+            channel = await guild.create_text_channel(ticket_name,
+                                                      overwrites=overwrites)
+            role = await guild.create_role(name=ticket_name)
+            await interaction.user.add_roles(role)
+            await channel.set_permissions(role,
+                                          read_messages=True,
+                                          send_messages=True)
+
+            # Create embed with welcome message and buttons
+            embed = discord.Embed(
+                title="🎫 Support Ticket Created",
+                description=
+                f"Hello {interaction.user.mention}, please wait while our team contacts you.",
+                color=0x00ff00)
+            view = TicketControlView(interaction.user.id, support_role_id)
+            await channel.send(embed=embed, view=view)
+
+            await interaction.response.send_message(
+                f"✅ Created ticket: {channel.mention}", ephemeral=True)
+
+            increment_ticket_count()
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "❌ I don't have permission to create channels or roles.",
+                ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ An error occurred: {str(e)}", ephemeral=True)
+    elif interaction.type == discord.InteractionType.component:
+        if interaction.data["custom_id"] == "close_ticket":
+            if not interaction.channel.name.startswith("ticket-"):
+                await interaction.response.send_message(
+                    "❌ This is not a ticket channel.", ephemeral=True)
+                return
+            role = discord.utils.get(interaction.guild.roles,
+                                     name=interaction.channel.name)
+            if role:
+                await interaction.channel.set_permissions(
+                    role,
+                    overwrite=discord.PermissionOverwrite(read_messages=False))
+                await interaction.response.send_message("🔒 Ticket closed.")
+
+        elif interaction.data["custom_id"] == "delete_ticket":
+            if not interaction.channel.name.startswith("ticket-"):
+                await interaction.response.send_message(
+                    "❌ This is not a ticket channel.", ephemeral=True)
+                return
+            role = discord.utils.get(interaction.guild.roles,
+                                     name=interaction.channel.name)
+            if role:
+                await role.delete()
+            await interaction.channel.delete()
